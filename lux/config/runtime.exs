@@ -37,6 +37,9 @@ if config_env() in [:dev, :test] do
     base_url: env!("ALLORA_BASE_URL", :string!, "https://api.upshot.xyz/v2"),
     chain_slug: env!("ALLORA_CHAIN_SLUG", :string!, "testnet")
 
+  config :lux, Lux.LLM.Ollama,
+    endpoint: env!("OLLAMA_ENDPOINT", :string!, "http://localhost:11434")
+
   config :lux, :accounts,
     wallet_address: env!("WALLET_ADDRESS", :string!),
     hyperliquid_private_key: env!("HYPERLIQUID_PRIVATE_KEY", :string!),
