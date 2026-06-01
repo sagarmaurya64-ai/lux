@@ -1,6 +1,8 @@
 # API Keys
 ETHERSCAN_API_KEY="your-etherscan-api-key"
 ETHERSCAN_API_KEY_PRO="false"
+OPENROUTER_API_KEY="your-openrouter-api-key"
+
 
 # Base environment variables for development
 TOGETHER_API_KEY="sample-api-key"
