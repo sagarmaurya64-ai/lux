@@ -10,7 +10,6 @@ defmodule Lux.Signals.DiscordPresence do
   """
   def from_discord(payload) when is_map(payload) do
     user_id = Map.get(payload, "user_id") || Map.get(payload, :user_id)
-    status = Map.get(payload, "status") || Map.get(payload, :status)
 
     # In raw Gateway events, the user ID is sometimes nested under a "user" block
     user_id =
@@ -23,7 +22,7 @@ defmodule Lux.Signals.DiscordPresence do
 
     normalized_payload = %{
       user_id: user_id,
-      status: status,
+      status: Map.get(payload, "status") || Map.get(payload, :status),
       guild_id: Map.get(payload, "guild_id") || Map.get(payload, :guild_id),
       activities: parse_activities(Map.get(payload, "activities") || Map.get(payload, :activities))
     }
@@ -35,12 +34,17 @@ defmodule Lux.Signals.DiscordPresence do
     })
   end
 
+  def from_discord(_) do
+    {:error, [%{"message" => "Expected payload to be a map", "path" => []}]}
+  end
+
   @doc """
   Converts a validated Lux.Signal back to a raw Discord Gateway presence update payload map.
   """
   def to_discord(%Lux.Signal{payload: payload}) do
+    user_id = Map.get(payload, :user_id) || Map.get(payload, "user_id")
     %{
-      "user_id" => Map.get(payload, :user_id) || Map.get(payload, "user_id"),
+      "user" => %{"id" => user_id},
       "status" => Map.get(payload, :status) || Map.get(payload, "status"),
       "guild_id" => Map.get(payload, :guild_id) || Map.get(payload, "guild_id"),
       "activities" => serialize_activities(Map.get(payload, :activities) || Map.get(payload, "activities"))
@@ -51,17 +55,27 @@ defmodule Lux.Signals.DiscordPresence do
 
   # --- Helper Parsers ---
 
-  defp parse_activities(nil), do: []
   defp parse_activities(activities) when is_list(activities) do
-    Enum.map(activities, fn act ->
-      %{
-        name: Map.get(act, "name") || Map.get(act, :name),
-        type: Map.get(act, "type") || Map.get(act, :type),
-        state: Map.get(act, "state") || Map.get(act, :state),
-        details: Map.get(act, "details") || Map.get(act, :details)
-      }
+    Enum.reduce(activities, [], fn
+      act, acc when is_map(act) ->
+        name = Map.get(act, "name") || Map.get(act, :name)
+        type = Map.get(act, "type") || Map.get(act, :type)
+
+        if name && type do
+          acc ++ [%{
+            name: name,
+            type: type,
+            state: Map.get(act, "state") || Map.get(act, :state),
+            details: Map.get(act, "details") || Map.get(act, :details)
+          }]
+        else
+          acc
+        end
+      _, acc ->
+        acc
     end)
   end
+  defp parse_activities(_), do: []
 
   # --- Helper Serializers ---
 
@@ -72,10 +86,11 @@ defmodule Lux.Signals.DiscordPresence do
         "name" => Map.get(act, :name) || Map.get(act, "name"),
         "type" => Map.get(act, :type) || Map.get(act, "type"),
         "state" => Map.get(act, :state) || Map.get(act, "state"),
-        "details" => Map.get(act, :details) || Map.get(act, :details)
+        "details" => Map.get(act, :details) || Map.get(act, "details")
       }
       |> Enum.reject(fn {_, v} -> is_nil(v) end)
       |> Map.new()
     end)
   end
+  defp serialize_activities(_), do: []
 end

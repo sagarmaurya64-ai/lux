@@ -36,6 +36,30 @@ defmodule Lux.Schemas.DiscordInteractionSchema do
         data: %{
           type: :object,
           description: "The payload data specific to the interaction type (e.g. command name, options, custom_id)"
+        },
+        application_id: %{
+          type: :string,
+          description: "The application ID of the interaction"
+        },
+        version: %{
+          type: :integer,
+          description: "The version of the interaction API"
+        },
+        locale: %{
+          type: :string,
+          description: "The locale of the user"
+        },
+        guild_locale: %{
+          type: :string,
+          description: "The locale of the guild"
+        },
+        user: %{
+          type: :object,
+          description: "The user object who triggered the interaction (for DMs)"
+        },
+        message: %{
+          type: :object,
+          description: "The message object associated with component/modal interaction"
         }
       },
       required: ["id", "type", "token"]

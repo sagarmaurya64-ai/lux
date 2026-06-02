@@ -78,6 +78,31 @@ defmodule Lux.Schemas.DiscordMessageSchema do
         timestamp: %{
           type: :string,
           description: "ISO-8601 formatted string of when the message was sent"
+        },
+        id: %{
+          type: :string,
+          description: "The Snowflake ID of the message"
+        },
+        type: %{
+          type: :integer,
+          description: "The type of the message"
+        },
+        mentions: %{
+          type: :array,
+          items: %{type: :object},
+          description: "The list of users mentioned in the message"
+        },
+        referenced_message: %{
+          type: :object,
+          description: "The message that this message is in reply to (optional)"
+        },
+        flags: %{
+          type: :integer,
+          description: "The message flags"
+        },
+        edited_timestamp: %{
+          type: :string,
+          description: "ISO-8601 formatted string of when the message was edited (optional)"
         }
       },
       required: ["content", "channel_id", "author"]

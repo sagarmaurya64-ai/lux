@@ -7,9 +7,27 @@ defmodule Lux.Signals.DiscordSignalsTest do
   alias Lux.Signals.DiscordPresence
   alias Lux.Signal
 
+  # Define a dummy agent for testing the signal pipeline
+  defmodule TestDiscordAgent do
+    use Lux.Agent,
+      name: "test_discord_agent",
+      accepts_signals: [Lux.Schemas.DiscordMessageSchema],
+      signal_handlers: [
+        {Lux.Schemas.DiscordMessageSchema, {__MODULE__, :handle_discord_message}}
+      ]
+
+    def init(opts), do: {:ok, opts}
+
+    def handle_discord_message(signal, agent) do
+      send(self(), {:handled_signal, signal})
+      {:ok, agent}
+    end
+  end
+
   describe "DiscordMessageSignal" do
     test "from_discord/1 converts a valid raw message successfully" do
       raw_payload = %{
+        "id" => "112233445566",
         "content" => "Hello standard agent! 🚀",
         "channel_id" => "123456789012345678",
         "guild_id" => "987654321098765432",
@@ -31,7 +49,18 @@ defmodule Lux.Signals.DiscordSignalsTest do
             "description" => "Embed description"
           }
         ],
-        "timestamp" => "2026-06-02T16:00:00Z"
+        "timestamp" => "2026-06-02T16:00:00Z",
+        "type" => 0,
+        "flags" => 64,
+        "mentions" => [
+          %{"id" => "223344", "username" => "mentioned_user"}
+        ],
+        "referenced_message" => %{
+          "id" => "88888",
+          "content" => "Replying to this",
+          "channel_id" => "123456789012345678",
+          "author" => %{"id" => "99999", "username" => "original_author"}
+        }
       }
 
       assert {:ok, %Signal{} = signal} = DiscordMessage.from_discord(raw_payload)
@@ -40,11 +69,17 @@ defmodule Lux.Signals.DiscordSignalsTest do
       assert signal.schema_id == Lux.Schemas.DiscordMessageSchema
 
       payload = signal.payload
+      assert payload.id == "112233445566"
       assert payload.content == "Hello standard agent! 🚀"
       assert payload.channel_id == "123456789012345678"
       assert payload.author.username == "test_user"
       assert [att] = payload.attachments
       assert att.filename == "log.txt"
+      assert payload.type == 0
+      assert payload.flags == 64
+      assert [mention] = payload.mentions
+      assert mention.username == "mentioned_user"
+      assert payload.referenced_message.content == "Replying to this"
     end
 
     test "from_discord/1 supports atom-keyed maps" do
@@ -63,7 +98,7 @@ defmodule Lux.Signals.DiscordSignalsTest do
     end
 
     test "from_discord/1 fails on missing required fields" do
-      # Missing content
+      # Missing content, channel_id, or author
       raw_payload = %{
         "channel_id" => "123456789012345678",
         "author" => %{
@@ -75,24 +110,54 @@ defmodule Lux.Signals.DiscordSignalsTest do
       assert {:error, _errors} = DiscordMessage.from_discord(raw_payload)
     end
 
-    test "to_discord/1 converts a validated signal back to raw Discord format" do
+    test "from_discord/1 defensively handles malformed inputs" do
+      # Non-map input
+      assert {:error, [%{"message" => "Expected payload to be a map"}]} = DiscordMessage.from_discord("invalid")
+
+      # Malformed list for attachments
       raw_payload = %{
+        "content" => "Malformed attachments",
+        "channel_id" => "1234",
+        "author" => %{"id" => "5678", "username" => "user"},
+        "attachments" => "should_be_a_list"
+      }
+      assert {:ok, %Signal{} = signal} = DiscordMessage.from_discord(raw_payload)
+      assert signal.payload.attachments == []
+    end
+
+    test "to_discord/1 converts a validated signal back to raw Discord format with audit fields" do
+      raw_payload = %{
+        "id" => "1122",
         "content" => "Converting back!",
         "channel_id" => "12345",
         "author" => %{
           "id" => "6789",
           "username" => "convert_user",
           "bot" => true
+        },
+        "type" => 19,
+        "flags" => 0,
+        "mentions" => [%{"id" => "444", "username" => "mentioned"}],
+        "referenced_message" => %{
+          "id" => "999",
+          "content" => "Original",
+          "channel_id" => "12345",
+          "author" => %{"id" => "123", "username" => "other"}
         }
       }
 
       {:ok, signal} = DiscordMessage.from_discord(raw_payload)
       serialized = DiscordMessage.to_discord(signal)
 
+      assert serialized["id"] == "1122"
       assert serialized["content"] == "Converting back!"
       assert serialized["channel_id"] == "12345"
       assert serialized["author"]["username"] == "convert_user"
       assert serialized["author"]["bot"] == true
+      assert serialized["type"] == 19
+      assert [m] = serialized["mentions"]
+      assert m["username"] == "mentioned"
+      assert serialized["referenced_message"]["content"] == "Original"
     end
   end
 
@@ -104,6 +169,9 @@ defmodule Lux.Signals.DiscordSignalsTest do
         "token" => "abc_interaction_token",
         "guild_id" => "22222222",
         "channel_id" => "33333333",
+        "application_id" => "998877",
+        "version" => 1,
+        "locale" => "en-US",
         "member" => %{
           "user" => %{
             "id" => "44444444",
@@ -112,7 +180,7 @@ defmodule Lux.Signals.DiscordSignalsTest do
         },
         "data" => %{
           "name" => "verify_bounty",
-          "options" => []
+          "options" => [%{"name" => "target", "type" => 3, "value" => "lux"}]
         }
       }
 
@@ -121,6 +189,9 @@ defmodule Lux.Signals.DiscordSignalsTest do
       assert signal.topic == "discord:interaction:11111111"
       assert signal.payload.type == 2
       assert signal.payload.token == "abc_interaction_token"
+      assert signal.payload.application_id == "998877"
+      assert signal.payload.locale == "en-US"
+      assert signal.payload.data.name == "verify_bounty"
     end
 
     test "from_discord/1 fails on missing token" do
@@ -132,11 +203,18 @@ defmodule Lux.Signals.DiscordSignalsTest do
       assert {:error, _errors} = DiscordInteraction.from_discord(raw_payload)
     end
 
+    test "from_discord/1 defensively handles malformed inputs" do
+      # Non-map input
+      assert {:error, [%{"message" => "Expected payload to be a map"}]} = DiscordInteraction.from_discord("invalid")
+    end
+
     test "to_discord/1 converts validated interaction back successfully" do
       raw_payload = %{
         "id" => "111",
         "type" => 3, # MESSAGE_COMPONENT
-        "token" => "component_token"
+        "token" => "component_token",
+        "application_id" => "123456",
+        "locale" => "fr"
       }
 
       {:ok, signal} = DiscordInteraction.from_discord(raw_payload)
@@ -145,6 +223,8 @@ defmodule Lux.Signals.DiscordSignalsTest do
       assert serialized["id"] == "111"
       assert serialized["type"] == 3
       assert serialized["token"] == "component_token"
+      assert serialized["application_id"] == "123456"
+      assert serialized["locale"] == "fr"
     end
   end
 
@@ -192,6 +272,46 @@ defmodule Lux.Signals.DiscordSignalsTest do
       }
 
       assert {:error, _errors} = DiscordPresence.from_discord(raw_payload)
+    end
+
+    test "to_discord/1 converts validated presence back to Gateway User Object shape" do
+      raw_payload = %{
+        "user_id" => "55555",
+        "status" => "dnd",
+        "activities" => [
+          %{
+            "name" => "Elixir",
+            "type" => 1,
+            "details" => "Live Coding"
+          }
+        ]
+      }
+
+      {:ok, signal} = DiscordPresence.from_discord(raw_payload)
+      serialized = DiscordPresence.to_discord(signal)
+
+      # Must output raw Gateway user object structure
+      assert serialized["user"]["id"] == "55555"
+      assert serialized["status"] == "dnd"
+      assert [act] = serialized["activities"]
+      assert act["name"] == "Elixir"
+      assert act["details"] == "Live Coding" # Verifies fix of key check bug!
+    end
+  end
+
+  describe "Signal Processing Pipeline" do
+    test "pipeline: flows through Agent signal handler successfully" do
+      # Create validated signal
+      raw_payload = %{
+        "content" => "Hello pipeline integration!",
+        "channel_id" => "1234",
+        "author" => %{"id" => "5678", "username" => "piped"}
+      }
+      {:ok, signal} = DiscordMessage.from_discord(raw_payload)
+
+      # Invoke agent's handle_signal/2 function directly to verify it integrates beautifully
+      assert {:ok, _agent} = TestDiscordAgent.handle_signal(signal, %{})
+      assert_received {:handled_signal, ^signal}
     end
   end
 end
