@@ -148,10 +148,12 @@ defmodule Lux.Signals.DiscordMessage do
 
   defp serialize_attachments(nil), do: []
   defp serialize_attachments(attachments) when is_list(attachments) do
-    Enum.map(attachments, fn att ->
+    attachments
+    |> Enum.filter(&is_map/1)
+    |> Enum.map(fn att ->
       %{
         "id" => Map.get(att, :id) || Map.get(att, "id"),
-        "filename" => Map.get(att, :filename) || Map.get(att, :filename),
+        "filename" => Map.get(att, :filename) || Map.get(att, "filename"),
         "url" => Map.get(att, :url) || Map.get(att, "url")
       }
     end)
@@ -160,7 +162,9 @@ defmodule Lux.Signals.DiscordMessage do
 
   defp serialize_mentions(nil), do: []
   defp serialize_mentions(mentions) when is_list(mentions) do
-    Enum.map(mentions, fn m ->
+    mentions
+    |> Enum.filter(&is_map/1)
+    |> Enum.map(fn m ->
       %{
         "id" => Map.get(m, :id) || Map.get(m, "id"),
         "username" => Map.get(m, :username) || Map.get(m, "username"),

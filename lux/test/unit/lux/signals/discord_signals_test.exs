@@ -19,7 +19,9 @@ defmodule Lux.Signals.DiscordSignalsTest do
     def init(opts), do: {:ok, opts}
 
     def handle_discord_message(signal, agent) do
-      send(self(), {:handled_signal, signal})
+      if test_process = agent.template_opts[:test_process] do
+        send(test_process, {:handled_signal, signal})
+      end
       {:ok, agent}
     end
   end
@@ -125,6 +127,29 @@ defmodule Lux.Signals.DiscordSignalsTest do
       assert signal.payload.attachments == []
     end
 
+    test "from_discord/1 fails when required content is nil" do
+      raw_payload = %{
+        "content" => nil,
+        "channel_id" => "123456789012345678",
+        "author" => %{
+          "id" => "112233445566778899",
+          "username" => "test_user"
+        }
+      }
+      assert {:error, _errors} = DiscordMessage.from_discord(raw_payload)
+    end
+
+    test "from_discord/1 handles list of non-map attachments gracefully" do
+      raw_payload = %{
+        "content" => "List containing non-maps",
+        "channel_id" => "1234",
+        "author" => %{"id" => "5678", "username" => "user"},
+        "attachments" => ["not_a_map", %{"id" => "1", "filename" => "x.png", "url" => "http://x.png"}]
+      }
+      assert {:ok, %Signal{} = signal} = DiscordMessage.from_discord(raw_payload)
+      assert [%{id: "1", filename: "x.png", url: "http://x.png"}] = signal.payload.attachments
+    end
+
     test "to_discord/1 converts a validated signal back to raw Discord format with audit fields" do
       raw_payload = %{
         "id" => "1122",
@@ -208,6 +233,29 @@ defmodule Lux.Signals.DiscordSignalsTest do
       assert {:error, [%{"message" => "Expected payload to be a map"}]} = DiscordInteraction.from_discord("invalid")
     end
 
+    test "from_discord/1 fails when required id is nil" do
+      raw_payload = %{
+        "id" => nil,
+        "type" => 2,
+        "token" => "abc"
+      }
+      assert {:error, _errors} = DiscordInteraction.from_discord(raw_payload)
+    end
+
+    test "from_discord/1 handles list of non-map options gracefully" do
+      raw_payload = %{
+        "id" => "11111111",
+        "type" => 2,
+        "token" => "abc",
+        "data" => %{
+          "name" => "test",
+          "options" => ["not_a_map", %{"name" => "x", "type" => 3, "value" => "val"}]
+        }
+      }
+      assert {:ok, %Signal{} = signal} = DiscordInteraction.from_discord(raw_payload)
+      assert [%{name: "x", type: 3, value: "val"}] = signal.payload.data.options
+    end
+
     test "to_discord/1 converts validated interaction back successfully" do
       raw_payload = %{
         "id" => "111",
@@ -274,6 +322,23 @@ defmodule Lux.Signals.DiscordSignalsTest do
       assert {:error, _errors} = DiscordPresence.from_discord(raw_payload)
     end
 
+    test "from_discord/1 fails on missing user_id or status" do
+      raw_payload1 = %{"status" => "online"}
+      raw_payload2 = %{"user_id" => "123"}
+      assert {:error, _} = DiscordPresence.from_discord(raw_payload1)
+      assert {:error, _} = DiscordPresence.from_discord(raw_payload2)
+    end
+
+    test "from_discord/1 handles list of non-map activities gracefully" do
+      raw_payload = %{
+        "user_id" => "999999",
+        "status" => "online",
+        "activities" => ["not_a_map", %{"name" => "Playing", "type" => 0}]
+      }
+      assert {:ok, %Signal{} = signal} = DiscordPresence.from_discord(raw_payload)
+      assert [%{name: "Playing", type: 0}] = signal.payload.activities
+    end
+
     test "to_discord/1 converts validated presence back to Gateway User Object shape" do
       raw_payload = %{
         "user_id" => "55555",
@@ -301,7 +366,30 @@ defmodule Lux.Signals.DiscordSignalsTest do
 
   describe "Signal Processing Pipeline" do
     test "pipeline: flows through Agent signal handler successfully" do
-      # Create validated signal
+      # 1. Setup local router and agent registry
+      unique_id = System.unique_integer([:positive])
+      registry_name = :"agent_registry_#{unique_id}"
+      hub_name = :"test_hub_#{unique_id}"
+      router_name = :"test_router_#{unique_id}"
+
+      # Start required processes
+      start_supervised!({Registry, keys: :duplicate, name: registry_name})
+      start_supervised!({Lux.AgentHub, name: hub_name})
+      start_supervised!({Lux.Signal.Router.Local, name: router_name})
+
+      # 2. Start the test agent under supervision with test_process set in template_opts
+      agent_name = :"test_agent_#{unique_id}"
+      {:ok, agent_pid} = start_supervised({TestDiscordAgent, %{
+        name: agent_name,
+        template_opts: %{test_process: self()}
+      }})
+
+      agent_state = :sys.get_state(agent_pid)
+
+      # Register the agent with the hub
+      :ok = Lux.AgentHub.register(hub_name, agent_state, agent_pid, [:discord])
+
+      # 3. Create the DiscordMessage signal
       raw_payload = %{
         "content" => "Hello pipeline integration!",
         "channel_id" => "1234",
@@ -309,9 +397,22 @@ defmodule Lux.Signals.DiscordSignalsTest do
       }
       {:ok, signal} = DiscordMessage.from_discord(raw_payload)
 
-      # Invoke agent's handle_signal/2 function directly to verify it integrates beautifully
-      assert {:ok, _agent} = TestDiscordAgent.handle_signal(signal, %{})
-      assert_received {:handled_signal, ^signal}
+      # Target the specific registered agent
+      signal = %Signal{signal | recipient: agent_state.id}
+
+      # 4. Subscribe to the signal delivery events
+      :ok = Lux.Signal.Router.Local.subscribe(signal.id, name: router_name)
+
+      # 5. Route the signal through the local router
+      assert :ok = Lux.Signal.Router.Local.route(signal, name: router_name, hub: hub_name)
+
+      # 6. Verify the signal was delivered successfully
+      assert_receive {:signal_delivered, signal_id}, 2000
+      assert signal_id == signal.id
+
+      # 7. Verify the agent actually received and handled the signal
+      assert_receive {:handled_signal, handled_signal}, 2000
+      assert handled_signal.payload.content == "Hello pipeline integration!"
     end
   end
 end

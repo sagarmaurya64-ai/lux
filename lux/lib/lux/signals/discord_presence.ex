@@ -81,7 +81,9 @@ defmodule Lux.Signals.DiscordPresence do
 
   defp serialize_activities(nil), do: []
   defp serialize_activities(activities) when is_list(activities) do
-    Enum.map(activities, fn act ->
+    activities
+    |> Enum.filter(&is_map/1)
+    |> Enum.map(fn act ->
       %{
         "name" => Map.get(act, :name) || Map.get(act, "name"),
         "type" => Map.get(act, :type) || Map.get(act, "type"),

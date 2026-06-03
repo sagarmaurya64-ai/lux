@@ -163,7 +163,7 @@ defmodule Lux.Signals.DiscordInteraction do
   defp serialize_member(member) when is_map(member) do
     %{
       "user" => serialize_user(Map.get(member, :user) || Map.get(member, "user")),
-      "nick" => Map.get(member, :nick) || Map.get(member, :nick),
+      "nick" => Map.get(member, :nick) || Map.get(member, "nick"),
       "roles" => Map.get(member, :roles) || Map.get(member, "roles") || [],
       "permissions" => Map.get(member, :permissions) || Map.get(member, "permissions")
     }
@@ -198,7 +198,9 @@ defmodule Lux.Signals.DiscordInteraction do
   end
 
   defp serialize_options(options) when is_list(options) do
-    Enum.map(options, fn opt ->
+    options
+    |> Enum.filter(&is_map/1)
+    |> Enum.map(fn opt ->
       %{
         "name" => Map.get(opt, :name) || Map.get(opt, "name"),
         "type" => Map.get(opt, :type) || Map.get(opt, "type"),
